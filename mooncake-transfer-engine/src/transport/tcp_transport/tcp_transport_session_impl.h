@@ -1072,6 +1072,17 @@ struct TcpContext {
             pool_.context(pool_.nextShardIndex()),
             [this](asio::error_code ec, tcpsocket socket) {
                 if (!ec) {
+#ifdef __linux__
+                    if (tcp_sockmap::enabled()) {
+                        try {
+                            tcp_sockmap::enroll(socket, false);
+                        } catch (const std::exception& error) {
+                            LOG(ERROR) << "SOCKMAP accept: " << error.what();
+                            doAccept();
+                            return;  // Drop this unenrolled socket.
+                        }
+                    }
+#endif
                     asio::error_code nodelay_ec;
                     socket.set_option(asio::ip::tcp::no_delay(true),
                                       nodelay_ec);

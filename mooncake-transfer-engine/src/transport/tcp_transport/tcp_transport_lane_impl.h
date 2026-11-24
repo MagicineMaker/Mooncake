@@ -1060,8 +1060,35 @@ void TcpTransport::handleLaneResolved(
             try {
                 asio::async_connect(
                     *lane->socket, results,
-                    [group, lane, epoch](asio::error_code connect_ec,
-                                         const asio::ip::tcp::endpoint&) {
+                    [group, lane, epoch, socket = lane->socket](
+                        asio::error_code connect_ec,
+                        const asio::ip::tcp::endpoint&) {
+#ifdef __linux__
+                        if (!connect_ec && tcp_sockmap::enabled()) {
+                            std::shared_ptr<tcp_sockmap::PeerWait> wait;
+                            try {
+                                const auto key =
+                                    tcp_sockmap::enroll(*socket, true);
+                                wait = std::make_shared<tcp_sockmap::PeerWait>(
+                                    socket, key,
+                                    [group, lane,
+                                     epoch](const std::string& error) {
+                                        if (error.empty())
+                                            handleLaneConnected(group, lane,
+                                                                epoch, {});
+                                        else
+                                            handleLaneConnectFailure(
+                                                group, lane, epoch, error);
+                                    });
+                            } catch (const std::exception& error) {
+                                handleLaneConnectFailure(group, lane, epoch,
+                                                         error.what());
+                                return;
+                            }
+                            wait->check();
+                            return;
+                        }
+#endif
                         handleLaneConnected(group, lane, epoch, connect_ec);
                     });
             } catch (const std::exception& e) {

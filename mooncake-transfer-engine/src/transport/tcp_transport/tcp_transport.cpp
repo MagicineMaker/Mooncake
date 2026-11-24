@@ -45,6 +45,9 @@
 #include "transport/transport.h"
 
 #include "cuda_alike.h"
+#ifdef __linux__
+#include "tcp_sockmap_impl.h"
+#endif
 
 #if defined(USE_ASCEND) || defined(USE_ASCEND_DIRECT) || \
     defined(USE_ASCEND_HETEROGENEOUS) || defined(USE_UBSHMEM)
