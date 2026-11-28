@@ -187,6 +187,8 @@ class ShmTransport : public Transport {
 
     void failSlice(TransferTask& task, const TransferRequest& request);
 
+    std::atomic<uint64_t> copied_read_bytes_{0};
+    std::atomic<uint64_t> copied_write_bytes_{0};
     RWSpinlock relocate_lock_;
     std::unordered_map<SegmentID, RelocateMap> relocate_map_;
 

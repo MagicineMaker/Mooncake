@@ -326,6 +326,10 @@ void ShmTransport::unlinkShmEntry(const AllocatedShmEntry& entry) {
 }
 
 ShmTransport::~ShmTransport() {
+    LOG(INFO) << "ShmTransport copied read_bytes="
+              << copied_read_bytes_.load(std::memory_order_relaxed)
+              << " write_bytes="
+              << copied_write_bytes_.load(std::memory_order_relaxed);
     PendingUnmap pending;
     {
         RWSpinlock::WriteGuard guard(relocate_lock_);
@@ -947,6 +951,10 @@ Status ShmTransport::copySlice(TransferTask& task,
                     ? slice->source_addr
                     : (void*)slice->local.dest_addr;
     std::memcpy(dst, src, slice->length);
+    auto& byte_counter = request.opcode == TransferRequest::READ
+                             ? copied_read_bytes_
+                             : copied_write_bytes_;
+    byte_counter.fetch_add(slice->length, std::memory_order_relaxed);
     slice->markSuccess();
     return Status::OK();
 }

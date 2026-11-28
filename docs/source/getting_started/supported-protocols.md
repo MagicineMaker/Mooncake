@@ -488,7 +488,8 @@ requirement.
 - After `freeSharedMemory` + `allocateSharedMemory`, a peer that still has a cached mapping probes the object name before memcpy. An unlinked object is dropped and the segment descriptor is refetched once; a changed virtual address still requires the initiator to read the new `BufferDesc.addr` (relocate cannot guess a new offset). Background refresh remains optional via `MC_TE_METADATA_REFRESH_INTERVAL_SECONDS`.
 - Relocate caches at most 32 mmap'd peer objects per target. An in-flight copy pins its mapping so prune/cap cannot `munmap` it until memcpy returns; the cache may briefly exceed 32 while pins are held.
 - Default off because the path is not NUMA-aware
-- Mooncake Store segments are not shm-backed until a follow-up allocator change
+
+In **Mooncake Store**, set `protocol="shm"` in `DistributedObjectStore.setup` for the pool owner and all requesters. Give the owner a positive `global_segment_size` and use `0` for requester-only clients. Classic Transfer Engine allocates and registers the owner's shared memory during setup. Requesters keep their staging buffers private and copy directly into or out of the mapped pool. Use the master's offset allocator and provision enough free space in the shared mount for the pool. The master RPC and transfer metadata handshake still use their normal network endpoints.
 
 ### Ascend Transport (ascend)
 

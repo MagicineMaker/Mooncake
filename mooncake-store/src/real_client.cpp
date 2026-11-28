@@ -1259,7 +1259,19 @@ tl::expected<void, ErrorCode> RealClient::setup_internal(
     // If global_segment_size is 0, skip mount segment. Transports with a
     // registration limit split it into balanced chunks; other transports use
     // one segment.
-    if (protocol == "cxl") {
+    if (protocol == "shm") {
+        // Requesters own only private local buffers. The pool owner must
+        // publish a registered TE-allocated SHM segment for cross-process I/O.
+        if (global_segment_size > 0) {
+            SharedMemoryOptions options;
+            options.use_hugepage = use_hugepage_;
+            if (use_hugepage_)
+                options.hugepage_size = get_hugepage_size_from_env();
+            auto mounted =
+                client_->MountSharedMemoryPool(global_segment_size, options);
+            if (!mounted) return tl::unexpected(mounted.error());
+        }
+    } else if (protocol == "cxl") {
         const auto cxl_config = CxlSegmentConfig::FromEnvironment();
         if (!cxl_config.device_size.has_value()) {
             LOG(FATAL) << "MC_CXL_DEV_SIZE not set";

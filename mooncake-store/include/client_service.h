@@ -476,6 +476,11 @@ class Client {
         const std::vector<std::string>& keys, const std::string& tenant_id,
         ReplicaType replica_type);
 
+    // Called by Store setup for its one owned SHM pool. The client unmounts
+    // the segment before freeing its POSIX mapping during teardown.
+    tl::expected<void, ErrorCode> MountSharedMemoryPool(
+        size_t size, const SharedMemoryOptions& options);
+
     /**
      * @brief Registers a memory segment to master for allocation
      * @param buffer Memory buffer to register
@@ -1192,6 +1197,7 @@ class Client {
 
     // Core components
     std::shared_ptr<TransferEngine> transfer_engine_;
+    void* shm_pool_ = nullptr;
     std::unique_ptr<store::GatherReadService> gather_service_;
     // Protects only gather_endpoint_; never held across an RPC.
     std::mutex gather_endpoint_mutex_;

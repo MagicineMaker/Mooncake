@@ -2,6 +2,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <span>
@@ -103,6 +104,37 @@ TEST_F(StandaloneClientTest, ConfigDictOmitsMasterAddress) {
     EXPECT_EQ(std::string(static_cast<const char*>(buffer_handle->ptr()),
                           buffer_handle->size()),
               test_data);
+}
+
+TEST_F(StandaloneClientTest, SharedMemoryRequesterCopiesToAndFromSeparatePool) {
+    external_master_ = std::make_unique<EmbeddedMaster>();
+    InProcMasterConfig master_config;
+    master_config.http_metadata_port = 0;
+    ASSERT_TRUE(external_master_->Start(master_config));
+    constexpr size_t local_size = 4 * 1024 * 1024;
+    const auto& master = external_master_->master_address();
+    ASSERT_TRUE(client_
+                    ->setup_internal("127.0.0.1", "P2PHANDSHAKE",
+                                     2 * local_size, local_size, "shm", "",
+                                     master, nullptr)
+                    .has_value());
+    const std::string expected = "shared-memory-round-trip";
+    std::string staging = expected;
+    auto requester = RealClient::create();
+    ASSERT_TRUE(requester
+                    ->setup_internal("127.0.0.1", "P2PHANDSHAKE", 0, local_size,
+                                     "shm", "", master, nullptr)
+                    .has_value());
+    ASSERT_NE(requester->get_hostname(), client_->get_hostname());
+
+    ASSERT_EQ(requester->register_buffer(staging.data(), staging.size()), 0);
+    ASSERT_EQ(requester->put_from("remote-key", staging.data(), staging.size()),
+              0);
+    std::fill(staging.begin(), staging.end(), '\0');
+    ASSERT_EQ(requester->get_into("remote-key", staging.data(), staging.size()),
+              static_cast<int64_t>(expected.size()));
+    EXPECT_EQ(staging, expected);
+    EXPECT_EQ(requester->unregister_buffer(staging.data()), 0);
 }
 
 TEST_F(StandaloneClientTest, RejectsEmptyMetadataWithoutStandalone) {

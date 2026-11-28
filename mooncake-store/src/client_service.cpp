@@ -38,6 +38,7 @@
 #include "transfer_engine.h"
 #include "topology.h"
 #include "transfer_task.h"
+#include "transport/shm_transport/shm_transport.h"
 #include "transport/transport.h"
 #include "config.h"
 #include "ha/leadership/leader_coordinator_factory.h"
@@ -591,6 +592,10 @@ Client::~Client() {
         }
     }
 
+    // The MountSharedMemoryPool allocation belongs to this Store client,
+    // including when its TransferEngine was supplied by an external caller.
+    if (shm_pool_) transfer_engine_->freeSharedMemory(shm_pool_);
+
     // Stop hot cache handler before unregistering/freeing its backing memory.
     hot_cache_handler_.reset();
     UnregisterLocalHotCacheMemory();
@@ -983,11 +988,18 @@ ErrorCode Client::InitTransferEngine(
     // the TransferEngine, so the store must still install transports.
     bool use_tent = transfer_engine_->isUsingTent();
 
+    if (protocol == "shm" && use_tent) {
+        LOG(ERROR)
+            << "POSIX SHM Store segments require the classic Transfer Engine";
+        return ErrorCode::INVALID_PARAMS;
+    }
     bool auto_discover = false;
     if (!use_tent) {
         auto config = ClientAutoDiscoveryConfig::FromEnvironment(
             protocol, device_names.has_value());
-        auto_discover = config.enabled;
+        // Explicit SHM needs no device discovery. Install it below even if
+        // the inherited environment enables discovery for other transports.
+        auto_discover = protocol != "shm" && config.enabled;
         transfer_engine_->setAutoDiscover(
             {.enabled = auto_discover, .protocol = protocol});
 
@@ -1100,7 +1112,8 @@ ErrorCode Client::InitTransferEngine(
                 return ErrorCode::INTERNAL_ERROR;
             }
         } else if (protocol == "nvlink" || protocol == "ascend" ||
-                   protocol == "ubshmem" || protocol == "sunrise_link") {
+                   protocol == "ubshmem" || protocol == "sunrise_link" ||
+                   protocol == "shm") {
             if (device_names.has_value()) {
                 LOG(WARNING) << protocol
                              << " protocol does not use device names, ignoring";
@@ -1348,6 +1361,11 @@ std::optional<std::shared_ptr<Client>> Client::Create(
         }
     } else {
         client->transfer_engine_ = transfer_engine;
+        if (protocol == "shm" && !client->HasClassicTransport("shm")) {
+            LOG(ERROR)
+                << "Provided TransferEngine must have ShmTransport installed";
+            return std::nullopt;
+        }
         LOG(INFO) << "Use existing transfer engine instance. Skip its "
                      "initialization.";
     }
@@ -4013,6 +4031,25 @@ std::vector<int> Client::GetNicNumaNodes() const {
     return {nodes.begin(), nodes.end()};
 }
 
+tl::expected<void, ErrorCode> Client::MountSharedMemoryPool(
+    size_t size, const SharedMemoryOptions& options) {
+    if (!transfer_engine_ || shm_pool_) {
+        return tl::unexpected(ErrorCode::INVALID_PARAMS);
+    }
+    shm_pool_ = transfer_engine_->allocateSharedMemory(size, options);
+    if (!shm_pool_) {
+        LOG(ERROR) << "Failed to allocate SHM Store pool (" << size
+                   << " bytes)";
+        return tl::unexpected(ErrorCode::INVALID_PARAMS);
+    }
+    auto result = MountSegment(shm_pool_, size, "shm");
+    if (!result) {
+        transfer_engine_->freeSharedMemory(shm_pool_);
+        shm_pool_ = nullptr;
+    }
+    return result;
+}
+
 tl::expected<void, ErrorCode> Client::MountSegment(
     const void* buffer, size_t size, const std::string& protocol,
     const std::string& location) {
@@ -4079,6 +4116,18 @@ tl::expected<UUID, ErrorCode> Client::MountSegmentAndGetId(
     auto check_result = CheckRegisterMemoryParams(buffer, size, protocol);
     if (!check_result) {
         return tl::unexpected(check_result.error());
+    }
+    // SHM registration deliberately ignores ordinary local staging buffers.
+    // A segment published to the master must be mappable by its requesters.
+    if (protocol == "shm") {
+        auto* transport =
+            dynamic_cast<ShmTransport*>(transfer_engine_->getTransport("shm"));
+        std::string name;
+        if (!transport ||
+            !transport->getShmName(const_cast<void*>(buffer), &name)) {
+            LOG(ERROR) << "SHM Store segments require allocateSharedMemory";
+            return tl::unexpected(ErrorCode::INVALID_PARAMS);
+        }
     }
 
     UUID segment_id;
